@@ -5,9 +5,10 @@ import '../models/board_data.dart';
 import '../models/game_state.dart';
 import '../models/player.dart';
 import '../models/tile.dart';
+import 'lobby_screen.dart';
 
 // ============================================================================
-// BoardWidget — top-level entry point for the visual board
+// BoardWidget
 // ============================================================================
 class BoardWidget extends ConsumerWidget {
   const BoardWidget({super.key});
@@ -15,12 +16,9 @@ class BoardWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final gameState = ref.watch(gameControllerProvider);
-
     return Column(
       children: [
-        Expanded(
-          child: _LagosBoard(gameState: gameState),
-        ),
+        Expanded(child: _LagosBoard(gameState: gameState)),
         _ControlPanel(gameState: gameState),
       ],
     );
@@ -28,16 +26,24 @@ class BoardWidget extends ConsumerWidget {
 }
 
 // ============================================================================
-// _LagosBoard — paints the 40-tile square board
+// _LagosBoard
 // ============================================================================
 //
-// Layout:   [bottom row  0–9  ] = bottom  (left → right)
-//           [left column 10–19] = left    (bottom → top)
-//           [top row     20–29] = top     (right → left)
-//           [right column30–39] = right   (top → bottom)
+// CORRECT clockwise Monopoly winding order, viewed from above:
 //
-// Each side has 10 tiles: 4 corners shared between sides.
-// The board is square; corners are larger than edge tiles.
+//   Corner 20 (Free Parking) ←─── Top row 29..21 ───── Corner 30 (LASTMA)
+//        │                                                      │
+//   Left col 19..11 (bottom→top)               Right col 31..39 (top→bottom)
+//        │                                                      │
+//   Corner 10 (Jail) ──────── Bottom row 9..1 ──────── Corner 0 (GO)
+//
+// GO is BOTTOM-RIGHT. Players move: right→up→left→down (clockwise).
+//
+// Tile index → screen position mapping:
+//   Bottom row : indices  0 (BR corner), 1–9  right→left, then  10 (BL corner)
+//   Left col   : indices 10 (BL corner), 11–19 bottom→top, then 20 (TL corner)
+//   Top row    : indices 20 (TL corner), 21–29 left→right, then 30 (TR corner)
+//   Right col  : indices 30 (TR corner), 31–39 top→bottom, then back to 0
 // ============================================================================
 class _LagosBoard extends StatelessWidget {
   final GameState gameState;
@@ -46,12 +52,15 @@ class _LagosBoard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
+      // Use shortest side so the board stays square on any screen
       final size = constraints.biggest.shortestSide;
-      // Corner tiles are 1.6× the width of edge tiles
-      // 8 edge tiles + 2 corner tiles per side = size
-      // cornerSize + 8 * edgeSize + cornerSize = size
-      // Let cornerSize = 1.6 * edgeSize → edgeSize = size / (8 + 3.2) = size / 11.2
-      final edgeSize = size / 11.2;
+
+      // Size math:
+      // Each side = 2 corners + 9 edge tiles  (corners are shared)
+      // cornerSize = 1.6 * edgeSize
+      // 2*cornerSize + 9*edgeSize = size
+      // 2*(1.6*e) + 9*e = size  →  12.2*e = size
+      final edgeSize   = size / 12.2;
       final cornerSize = edgeSize * 1.6;
 
       return Center(
@@ -60,77 +69,72 @@ class _LagosBoard extends StatelessWidget {
           height: size,
           child: Stack(
             children: [
-              // ── Green felt center ──────────────────────────────────────
+              // ── Green felt center ────────────────────────────────────
               Positioned(
                 left: cornerSize,
                 top: cornerSize,
                 child: Container(
-                  width: size - cornerSize * 2,
+                  width:  size - cornerSize * 2,
                   height: size - cornerSize * 2,
                   decoration: BoxDecoration(
                     color: const Color(0xFF1B5E20),
-                    border: Border.all(color: Colors.black, width: 1),
+                    border: Border.all(color: Colors.black54, width: 1),
                   ),
-                  child: Center(
-                    child: _CenterLogo(size: size - cornerSize * 2),
-                  ),
+                  child: Center(child: _CenterLogo(size: size - cornerSize * 2)),
                 ),
               ),
 
-              // ── Bottom row (0–9, left→right) ──────────────────────────
+              // ── BOTTOM ROW — index 9 down to 1, then corner 0 (GO) at BR ──
+              // Rendered right-to-left so GO ends up on the right
               Positioned(
                 left: 0,
                 bottom: 0,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    _buildCorner(0, cornerSize, gameState),
-                    for (int i = 1; i <= 9; i++)
-                      _buildEdgeTile(
-                          i, edgeSize, cornerSize, Side.bottom, gameState),
+                    _corner(10, cornerSize),   // BL — Jail
+                    for (int i = 9; i >= 1; i--)
+                      _edge(i, edgeSize, cornerSize, Side.bottom),
+                    _corner(0, cornerSize),    // BR — GO
                   ],
                 ),
               ),
 
-              // ── Left column (10–19, bottom→top) ───────────────────────
+              // ── LEFT COLUMN — index 11 up to 19 (bottom→top), corner 20 at TL ──
               Positioned(
                 left: 0,
                 top: cornerSize,
                 child: Column(
                   children: [
                     for (int i = 19; i >= 11; i--)
-                      _buildEdgeTile(
-                          i, edgeSize, cornerSize, Side.left, gameState),
-                    _buildCorner(10, cornerSize, gameState),
+                      _edge(i, edgeSize, cornerSize, Side.left),
                   ],
                 ),
               ),
 
-              // ── Top row (20–29, right→left) ───────────────────────────
+              // ── TOP ROW — corner 20 at TL, index 21 to 29, corner 30 at TR ──
               Positioned(
                 left: 0,
                 top: 0,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildCorner(20, cornerSize, gameState),
-                    for (int i = 29; i >= 21; i--)
-                      _buildEdgeTile(
-                          i, edgeSize, cornerSize, Side.top, gameState),
+                    _corner(20, cornerSize),   // TL — Free Parking
+                    for (int i = 21; i <= 29; i++)
+                      _edge(i, edgeSize, cornerSize, Side.top),
+                    _corner(30, cornerSize),   // TR — LASTMA
                   ],
                 ),
               ),
 
-              // ── Right column (30–39, top→bottom) ──────────────────────
+              // ── RIGHT COLUMN — index 31 to 39 (top→bottom) ──
               Positioned(
                 right: 0,
                 top: cornerSize,
                 child: Column(
                   children: [
-                    _buildCorner(30, cornerSize, gameState),
                     for (int i = 31; i <= 39; i++)
-                      _buildEdgeTile(
-                          i, edgeSize, cornerSize, Side.right, gameState),
+                      _edge(i, edgeSize, cornerSize, Side.right),
                   ],
                 ),
               ),
@@ -141,21 +145,19 @@ class _LagosBoard extends StatelessWidget {
     });
   }
 
-  Widget _buildCorner(int index, double size, GameState gs) {
-    final tile = gs.board[index];
-    final players = gs.players.where((p) => p.position == index).toList();
+  Widget _corner(int index, double size) {
+    final tile    = gameState.board[index];
+    final players = gameState.players.where((p) => p.position == index).toList();
     return _CornerTile(tile: tile, index: index, size: size, players: players);
   }
 
-  Widget _buildEdgeTile(
-      int index, double edgeSize, double cornerSize, Side side, GameState gs) {
-    final tile = gs.board[index];
-    final players = gs.players.where((p) => p.position == index).toList();
+  Widget _edge(int index, double edgeSize, double longSize, Side side) {
+    final tile    = gameState.board[index];
+    final players = gameState.players.where((p) => p.position == index).toList();
     return _EdgeTile(
       tile: tile,
-      index: index,
       edgeSize: edgeSize,
-      longSize: cornerSize,
+      longSize: longSize,
       side: side,
       players: players,
     );
@@ -163,24 +165,23 @@ class _LagosBoard extends StatelessWidget {
 }
 
 // ============================================================================
-// Side enum — used to rotate tiles correctly
+// Side enum
 // ============================================================================
 enum Side { bottom, left, top, right }
 
 // ============================================================================
-// _EdgeTile — a single non-corner board space
+// _EdgeTile
 // ============================================================================
 class _EdgeTile extends StatelessWidget {
   final Tile tile;
-  final int index;
-  final double edgeSize; // narrow dimension (width for bottom/top)
-  final double longSize; // tall dimension (height for bottom/top)
+  final double edgeSize;
+  final double longSize;
   final Side side;
   final List<Player> players;
 
   const _EdgeTile({
+    super.key,
     required this.tile,
-    required this.index,
     required this.edgeSize,
     required this.longSize,
     required this.side,
@@ -192,21 +193,22 @@ class _EdgeTile extends StatelessWidget {
     final isHorizontal = side == Side.bottom || side == Side.top;
     final w = isHorizontal ? edgeSize : longSize;
     final h = isHorizontal ? longSize : edgeSize;
-
-    Widget content = _TileContent(
-      tile: tile,
+    return SizedBox(
       width: w,
       height: h,
-      side: side,
-      players: players,
+      child: _TileContent(
+        tile: tile,
+        width: w,
+        height: h,
+        side: side,
+        players: players,
+      ),
     );
-
-    return SizedBox(width: w, height: h, child: content);
   }
 }
 
 // ============================================================================
-// _TileContent — renders the color strip, name, price and tokens
+// _TileContent — color strip + name + price + tokens
 // ============================================================================
 class _TileContent extends StatelessWidget {
   final Tile tile;
@@ -216,6 +218,7 @@ class _TileContent extends StatelessWidget {
   final List<Player> players;
 
   const _TileContent({
+    super.key,
     required this.tile,
     required this.width,
     required this.height,
@@ -225,40 +228,24 @@ class _TileContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stripSize = (side == Side.bottom || side == Side.top)
-        ? height * 0.22
-        : width * 0.22;
+    final isHoriz   = side == Side.bottom || side == Side.top;
+    final stripSize = isHoriz ? height * 0.22 : width * 0.22;
+    final hasColor  = tile.colorGroup != Colors.transparent;
 
-    // Color strip direction based on which side we're on
+    // ── Color strip ────────────────────────────────────────────────────
     Widget colorStrip = Container(
-      color: tile.colorGroup == Colors.transparent
-          ? Colors.transparent
-          : tile.colorGroup,
-      width:
-          side == Side.left || side == Side.right ? stripSize : double.infinity,
-      height:
-          side == Side.bottom || side == Side.top ? stripSize : double.infinity,
+      color: hasColor ? tile.colorGroup : Colors.transparent,
+      width:  isHoriz ? double.infinity : stripSize,
+      height: isHoriz ? stripSize : double.infinity,
+      child: tile.isOwned
+          ? Center(
+              child: Icon(Icons.home,
+                  size: stripSize * 0.6, color: tile.owner!.tokenColor),
+            )
+          : null,
     );
 
-    // Ownership indicator
-    if (tile.isOwned) {
-      colorStrip = Stack(
-        children: [
-          colorStrip,
-          Positioned.fill(
-            child: Center(
-              child: Icon(
-                Icons.home,
-                size: stripSize * 0.6,
-                color: tile.owner!.tokenColor,
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Name + price text
+    // ── Text content ────────────────────────────────────────────────────
     final nameText = Text(
       tile.name,
       textAlign: TextAlign.center,
@@ -276,14 +263,11 @@ class _TileContent extends StatelessWidget {
         ? Text(
             '₦${_fmt(tile.price)}',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: width * 0.08,
-              color: Colors.black87,
-            ),
+            style: TextStyle(fontSize: width * 0.08, color: Colors.black87),
           )
         : const SizedBox.shrink();
 
-    // Token dots
+    // ── Player tokens ───────────────────────────────────────────────────
     final tokenRow = players.isNotEmpty
         ? Wrap(
             alignment: WrapAlignment.center,
@@ -297,81 +281,40 @@ class _TileContent extends StatelessWidget {
           )
         : const SizedBox.shrink();
 
-    // Assemble tile body with color strip on the correct edge
+    Widget textBody = Padding(
+      padding: const EdgeInsets.all(1.5),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [nameText, priceText, tokenRow],
+      ),
+    );
+
+    // Rotate text so it reads inward from each edge
+    int quarterTurns = 0;
+    switch (side) {
+      case Side.bottom: quarterTurns = 2; break;
+      case Side.left:   quarterTurns = 1; break;
+      case Side.top:    quarterTurns = 0; break;
+      case Side.right:  quarterTurns = 3; break;
+    }
+    if (quarterTurns != 0) {
+      textBody = RotatedBox(quarterTurns: quarterTurns, child: textBody);
+    }
+
+    // ── Assemble strip + text based on side ────────────────────────────
     Widget body;
     switch (side) {
       case Side.bottom:
-        body = Column(
-          children: [
-            colorStrip,
-            Expanded(
-              child: RotatedBox(
-                quarterTurns: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(1),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [nameText, priceText, tokenRow],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
+        body = Column(children: [colorStrip, Expanded(child: textBody)]);
         break;
       case Side.top:
-        body = Column(
-          children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(1),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [nameText, priceText, tokenRow],
-                ),
-              ),
-            ),
-            colorStrip,
-          ],
-        );
+        body = Column(children: [Expanded(child: textBody), colorStrip]);
         break;
       case Side.left:
-        body = Row(
-          children: [
-            Expanded(
-              child: RotatedBox(
-                quarterTurns: 1,
-                child: Padding(
-                  padding: const EdgeInsets.all(1),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [nameText, priceText, tokenRow],
-                  ),
-                ),
-              ),
-            ),
-            colorStrip,
-          ],
-        );
+        body = Row(children: [Expanded(child: textBody), colorStrip]);
         break;
       case Side.right:
-        body = Row(
-          children: [
-            colorStrip,
-            Expanded(
-              child: RotatedBox(
-                quarterTurns: 3,
-                child: Padding(
-                  padding: const EdgeInsets.all(1),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [nameText, priceText, tokenRow],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
+        body = Row(children: [colorStrip, Expanded(child: textBody)]);
         break;
     }
 
@@ -386,21 +329,21 @@ class _TileContent extends StatelessWidget {
     );
   }
 
-  String _fmt(int amount) {
-    final s = amount.toString();
-    final buffer = StringBuffer();
-    int count = 0;
+  String _fmt(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    int c = 0;
     for (int i = s.length - 1; i >= 0; i--) {
-      if (count > 0 && count % 3 == 0) buffer.write(',');
-      buffer.write(s[i]);
-      count++;
+      if (c > 0 && c % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+      c++;
     }
-    return buffer.toString().split('').reversed.join();
+    return buf.toString().split('').reversed.join();
   }
 }
 
 // ============================================================================
-// _CornerTile — the four large corner spaces
+// _CornerTile
 // ============================================================================
 class _CornerTile extends StatelessWidget {
   final Tile tile;
@@ -409,6 +352,7 @@ class _CornerTile extends StatelessWidget {
   final List<Player> players;
 
   const _CornerTile({
+    super.key,
     required this.tile,
     required this.index,
     required this.size,
@@ -417,16 +361,11 @@ class _CornerTile extends StatelessWidget {
 
   String get _emoji {
     switch (index) {
-      case 0:
-        return '🚀'; // GO
-      case 10:
-        return '⛓️'; // Jail
-      case 20:
-        return '🌴'; // Freedom Park
-      case 30:
-        return '🚔'; // LASTMA
-      default:
-        return '⬛';
+      case 0:  return '🚀';
+      case 10: return '⛓️';
+      case 20: return '🌴';
+      case 30: return '🚔';
+      default: return '⬛';
     }
   }
 
@@ -460,7 +399,6 @@ class _CornerTile extends StatelessWidget {
               ],
             ),
           ),
-          // Player tokens
           if (players.isNotEmpty)
             Positioned(
               bottom: 4,
@@ -482,21 +420,18 @@ class _CornerTile extends StatelessWidget {
 }
 
 // ============================================================================
-// _CenterLogo — the Lagos Monopoly branding in the board center
+// _CenterLogo
 // ============================================================================
 class _CenterLogo extends StatelessWidget {
   final double size;
-  const _CenterLogo({required this.size});
+  const _CenterLogo({super.key, required this.size});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(
-          '🏙️',
-          style: TextStyle(fontSize: size * 0.15),
-        ),
+        Text('🏙️', style: TextStyle(fontSize: size * 0.15)),
         Text(
           'LAGOS',
           style: TextStyle(
@@ -505,8 +440,7 @@ class _CenterLogo extends StatelessWidget {
             color: Colors.white,
             letterSpacing: 6,
             shadows: const [
-              Shadow(
-                  color: Colors.black54, blurRadius: 4, offset: Offset(1, 2)),
+              Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(1, 2)),
             ],
           ),
         ),
@@ -534,17 +468,17 @@ class _CenterLogo extends StatelessWidget {
 }
 
 // ============================================================================
-// _ControlPanel — action buttons + player info strip at the bottom
+// _ControlPanel
 // ============================================================================
 class _ControlPanel extends ConsumerWidget {
   final GameState gameState;
-  const _ControlPanel({required this.gameState});
+  const _ControlPanel({super.key, required this.gameState});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.read(gameControllerProvider.notifier);
-    final player = gameState.currentPlayer;
-    final tile = gameState.currentTile;
+    final player     = gameState.currentPlayer;
+    final tile       = gameState.currentTile;
 
     return Container(
       color: const Color(0xFF1B2A1B),
@@ -552,7 +486,8 @@ class _ControlPanel extends ConsumerWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Status message ─────────────────────────────────────────────
+
+          // ── Status message ───────────────────────────────────────────
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -566,9 +501,9 @@ class _ControlPanel extends ConsumerWidget {
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // ── Dice display ───────────────────────────────────────────────
+          // ── Dice ─────────────────────────────────────────────────────
           if (gameState.lastDie1 > 0)
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -585,53 +520,75 @@ class _ControlPanel extends ConsumerWidget {
                 ],
               ],
             ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // ── Player balances ────────────────────────────────────────────
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: gameState.players.map((p) {
-                final isCurrent = p.id == player.id;
-                return Container(
-                  margin: const EdgeInsets.only(right: 8),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isCurrent
-                        ? p.tokenColor.withOpacity(0.25)
-                        : Colors.white10,
-                    borderRadius: BorderRadius.circular(8),
-                    border: isCurrent
-                        ? Border.all(color: p.tokenColor, width: 1.5)
-                        : null,
-                  ),
-                  child: Row(
-                    children: [
-                      CircleAvatar(radius: 7, backgroundColor: p.tokenColor),
-                      const SizedBox(width: 6),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(p.name,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold)),
-                          Text('₦${_fmt(p.balance)}',
-                              style: const TextStyle(
-                                  color: Color(0xFFFFD600), fontSize: 11)),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
+          // ── Player balances — Wrap so 8 players fit on small screens ──
+          // Each card shrinks to fit; bankrupt players shown greyed out
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            alignment: WrapAlignment.center,
+            children: gameState.players.map((p) {
+              final isCurrent  = p.id == player.id;
+              final isBankrupt = p.isBankrupt;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: isBankrupt
+                      ? Colors.white10
+                      : isCurrent
+                          ? p.tokenColor.withOpacity(0.25)
+                          : Colors.white10,
+                  borderRadius: BorderRadius.circular(8),
+                  border: isCurrent && !isBankrupt
+                      ? Border.all(color: p.tokenColor, width: 1.5)
+                      : null,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 6,
+                      backgroundColor:
+                          isBankrupt ? Colors.grey : p.tokenColor,
+                    ),
+                    const SizedBox(width: 5),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          p.name,
+                          style: TextStyle(
+                            color: isBankrupt ? Colors.white38 : Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            decoration: isBankrupt
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                        Text(
+                          isBankrupt
+                              ? 'Bankrupt'
+                              : '₦${_fmt(p.balance)}',
+                          style: TextStyle(
+                            color: isBankrupt
+                                ? Colors.white38
+                                : const Color(0xFFFFD600),
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // ── Action buttons ─────────────────────────────────────────────
+          // ── Action buttons ───────────────────────────────────────────
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -644,6 +601,7 @@ class _ControlPanel extends ConsumerWidget {
                   textColor: Colors.black,
                   onTap: controller.rollDice,
                 ),
+
               if (gameState.phase == GamePhase.landedOnProperty) ...[
                 _ActionButton(
                   label: '🏠  Buy  ₦${_fmt(tile.price)}',
@@ -656,18 +614,23 @@ class _ControlPanel extends ConsumerWidget {
                   onTap: controller.passProperty,
                 ),
               ],
-              if (player.isInJail && gameState.phase == GamePhase.waitingToRoll)
+
+              if (player.isInJail &&
+                  gameState.phase == GamePhase.waitingToRoll)
                 _ActionButton(
                   label: '💸  Pay ₦5,000 Fine',
                   color: const Color(0xFFEF5350),
                   onTap: controller.payJailFine,
                 ),
-              if (gameState.phase == GamePhase.gameOver)
-                _ActionButton(
-                  label: '🔄  New Game',
-                  color: const Color(0xFF1565C0),
-                  onTap: () {}, // wired in next task
-                ),
+
+              // End Game — always visible so players can quit anytime
+              _ActionButton(
+                label: gameState.phase == GamePhase.gameOver
+                    ? '🔄  New Game'
+                    : '🚪  End Game',
+                color: const Color(0xFF37474F),
+                onTap: () => _confirmEndGame(context, ref),
+              ),
             ],
           ),
         ],
@@ -675,22 +638,75 @@ class _ControlPanel extends ConsumerWidget {
     );
   }
 
-  String _fmt(int amount) {
-    final s = amount.toString();
-    final buffer = StringBuffer();
-    int count = 0;
-    for (int i = s.length - 1; i >= 0; i--) {
-      if (count > 0 && count % 3 == 0) buffer.write(',');
-      buffer.write(s[i]);
-      count++;
+  // ── Confirmation dialog before ending mid-game ───────────────────────────
+  void _confirmEndGame(BuildContext context, WidgetRef ref) {
+    // If game is already over, go straight back to lobby
+    if (gameState.phase == GamePhase.gameOver) {
+      _goToLobby(context);
+      return;
     }
-    return buffer.toString().split('').reversed.join();
+
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B2A1B),
+        title: const Text('End Game?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text(
+          'Are you sure you want to end the current game and return to the lobby?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx, true);
+              _goToLobby(context);
+            },
+            child: const Text('End Game',
+                style: TextStyle(
+                    color: Color(0xFFEF5350), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _goToLobby(BuildContext context) {
+    Navigator.of(context).pushAndRemoveUntil(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => const LobbyScreen(),
+        transitionsBuilder: (_, animation, __, child) =>
+            FadeTransition(opacity: animation, child: child),
+        transitionDuration: const Duration(milliseconds: 400),
+      ),
+      (route) => false,
+    );
+  }
+
+  String _fmt(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    int c = 0;
+    for (int i = s.length - 1; i >= 0; i--) {
+      if (c > 0 && c % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+      c++;
+    }
+    return buf.toString().split('').reversed.join();
   }
 }
 
+// ============================================================================
+// _DieBox
+// ============================================================================
 class _DieBox extends StatelessWidget {
   final int value;
-  const _DieBox({required this.value});
+  const _DieBox({super.key, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -702,19 +718,19 @@ class _DieBox extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(6),
         boxShadow: const [
-          BoxShadow(color: Colors.black45, blurRadius: 3, offset: Offset(1, 2))
+          BoxShadow(color: Colors.black45, blurRadius: 3, offset: Offset(1, 2)),
         ],
       ),
       child: Center(
-        child: Text(
-          faces[value],
-          style: const TextStyle(fontSize: 26),
-        ),
+        child: Text(faces[value], style: const TextStyle(fontSize: 26)),
       ),
     );
   }
 }
 
+// ============================================================================
+// _ActionButton
+// ============================================================================
 class _ActionButton extends StatelessWidget {
   final String label;
   final Color color;
@@ -722,6 +738,7 @@ class _ActionButton extends StatelessWidget {
   final VoidCallback onTap;
 
   const _ActionButton({
+    super.key,
     required this.label,
     required this.color,
     this.textColor = Colors.white,
@@ -739,7 +756,7 @@ class _ActionButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           boxShadow: const [
             BoxShadow(
-                color: Colors.black38, blurRadius: 4, offset: Offset(0, 2))
+                color: Colors.black38, blurRadius: 4, offset: Offset(0, 2)),
           ],
         ),
         child: Text(

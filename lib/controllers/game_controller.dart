@@ -309,12 +309,16 @@ class GameController extends StateNotifier<GameState> {
 
   void _advanceTurn(List<Player> players) {
     final total = players.length;
-    int next = (state.currentPlayerIndex + 1) % total;
-    int safety = 0;
-    while (players[next].isBankrupt && safety < total) {
+
+    // Walk forward one step at a time until we land on an active player.
+    // Using a for loop with a known bound avoids the off-by-one that caused
+    // the skipped-player bug with 5+ players.
+    int next = state.currentPlayerIndex;
+    for (int i = 0; i < total; i++) {
       next = (next + 1) % total;
-      safety++;
+      if (!players[next].isBankrupt) break;
     }
+
     state = state.copyWith(
       currentPlayerIndex: next,
       phase: GamePhase.waitingToRoll,
