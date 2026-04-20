@@ -152,6 +152,8 @@ class TokenComponent extends PositionComponent {
 
 // Simple smooth ease-in-out curve for the slide animation
 class _SmoothCurve extends Curve {
+  const _SmoothCurve();
+
   @override
   double transformInternal(double t) =>
       t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
