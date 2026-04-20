@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -368,4 +369,21 @@ final gameControllerProvider =
         balance: 150000),
   ];
   return GameController(players);
+});
+
+// ---------------------------------------------------------------------------
+// gameBridgeProvider — exposes a Stream<GameState> for the Flame layer.
+//
+// Architecture note: Flame has no knowledge of Riverpod. Instead of coupling
+// them directly, this provider converts the StateNotifier into a broadcast
+// stream. LagosGameBoard subscribes to this stream and updates its components
+// whenever game state changes — keeping both layers fully decoupled.
+// ---------------------------------------------------------------------------
+final gameBridgeProvider = StreamProvider<GameState>((ref) {
+  final controller = StreamController<GameState>.broadcast();
+  ref.listen<GameState>(gameControllerProvider, (_, next) {
+    controller.add(next);
+  });
+  ref.onDispose(controller.close);
+  return controller.stream;
 });
