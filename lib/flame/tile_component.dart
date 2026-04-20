@@ -1,8 +1,8 @@
 import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
-import 'package:flutter/material.dart' show Colors, Color, TextStyle,
-    FontWeight, TextAlign, TextOverflow;
+import 'package:flutter/material.dart' show Colors, Color, FontWeight,
+    TextAlign, TextOverflow;
 import '../models/tile.dart';
 import '../models/player.dart';
 import 'board_layout.dart';
@@ -10,23 +10,22 @@ import 'board_layout.dart';
 // ---------------------------------------------------------------------------
 // TileComponent
 // ---------------------------------------------------------------------------
-// Draws a single board space on the Flame canvas.
-// On tap it fires onTileTapped(index) which the parent FlameGame forwards
-// to Flutter for the property popup sheet.
+// Draws one board space on the Flame canvas.
+//
+// Position and size are set externally by LagosGameBoard after construction
+// so the board-centering offset can be applied uniformly.
+//
+// Fires onTileTapped(index) when tapped — LagosGameBoard forwards this to
+// Flutter for the property bottom sheet.
 // ---------------------------------------------------------------------------
 class TileComponent extends PositionComponent with TapCallbacks {
-  final Tile tile;
+  Tile tile;   // mutable so LagosGameBoard can update owner reference
   final int index;
   final BoardLayout layout;
   final void Function(int index) onTileTapped;
 
-  // Players currently standing on this tile (updated from game state)
-  List<Player> occupants = [];
-
-  // Cached paints — created once, reused every render frame
   late final ui.Paint _bgPaint;
   late final ui.Paint _borderPaint;
-  late final ui.Paint _stripPaint;
 
   TileComponent({
     required this.tile,
@@ -34,86 +33,85 @@ class TileComponent extends PositionComponent with TapCallbacks {
     required this.layout,
     required this.onTileTapped,
   }) {
-    final rect = layout.tileRect(index);
-    position = Vector2(rect.left, rect.top);
-    size     = Vector2(rect.width, rect.height);
-
-    _bgPaint = ui.Paint()..color = const Color(0xFFF5F0E8);
+    _bgPaint = ui.Paint()..color = const ui.Color(0xFFF5F0E8);
     _borderPaint = ui.Paint()
-      ..color = const Color(0xFF333333)
+      ..color       = const ui.Color(0xFF333333)
       ..strokeWidth = 0.8
-      ..style = ui.PaintingStyle.stroke;
-    _stripPaint = ui.Paint()
-      ..color = tile.colorGroup == Colors.transparent
-          ? const Color(0x00000000)
-          : tile.colorGroup;
+      ..style       = ui.PaintingStyle.stroke;
   }
 
+  // =========================================================================
+  // render
+  // =========================================================================
   @override
   void render(ui.Canvas canvas) {
     final w = size.x;
     final h = size.y;
-    final rect = ui.Rect.fromLTWH(0, 0, w, h);
 
     // ── Background ──────────────────────────────────────────────────────
-    canvas.drawRect(rect, _bgPaint);
+    canvas.drawRect(ui.Rect.fromLTWH(0, 0, w, h), _bgPaint);
 
     // ── Color strip ─────────────────────────────────────────────────────
     if (tile.colorGroup != Colors.transparent) {
-      final stripRect = _stripRect(w, h);
-      canvas.drawRect(stripRect, _stripPaint);
+      final stripPaint = ui.Paint()..color = tile.colorGroup;
+      canvas.drawRect(_stripRect(w, h), stripPaint);
 
-      // Ownership dot on the strip
       if (tile.isOwned) {
         final ownerPaint = ui.Paint()..color = tile.owner!.tokenColor;
-        final dotR = stripRect.shortestSide * 0.3;
-        canvas.drawCircle(stripRect.center, dotR, ownerPaint);
+        final sr = _stripRect(w, h);
+        canvas.drawCircle(
+          ui.Offset(sr.center.dx, sr.center.dy),
+          sr.shortestSide * 0.3,
+          ownerPaint,
+        );
       }
     }
 
-    // ── Border ───────────────────────────────────────────────────────────
-    canvas.drawRect(rect, _borderPaint);
+    // ── Border ──────────────────────────────────────────────────────────
+    canvas.drawRect(ui.Rect.fromLTWH(0, 0, w, h), _borderPaint);
 
-    // ── Text (name + price) ──────────────────────────────────────────────
-    _drawTileText(canvas, w, h);
+    // ── Text ────────────────────────────────────────────────────────────
+    _drawText(canvas, w, h);
   }
 
-  // ── Returns the color strip rect for each board side ──────────────────
+  // =========================================================================
+  // Strip rect — color band on the inward-facing edge of each side
+  // =========================================================================
   ui.Rect _stripRect(double w, double h) {
-    const stripRatio = 0.22;
-    // Corner tiles have no strip
+    const ratio = 0.22;
     if (_isCorner) return ui.Rect.zero;
-
-    if (_isBottom) return ui.Rect.fromLTWH(0, 0, w, h * stripRatio);
-    if (_isTop)    return ui.Rect.fromLTWH(0, h * (1 - stripRatio), w, h * stripRatio);
-    if (_isLeft)   return ui.Rect.fromLTWH(w * (1 - stripRatio), 0, w * stripRatio, h);
-    // right
-    return ui.Rect.fromLTWH(0, 0, w * stripRatio, h);
+    if (_isBottom) return ui.Rect.fromLTWH(0, 0, w, h * ratio);
+    if (_isTop)    return ui.Rect.fromLTWH(0, h * (1 - ratio), w, h * ratio);
+    if (_isLeft)   return ui.Rect.fromLTWH(w * (1 - ratio), 0, w * ratio, h);
+    // right side
+    return ui.Rect.fromLTWH(0, 0, w * ratio, h);
   }
 
-  void _drawTileText(ui.Canvas canvas, double w, double h) {
+  // =========================================================================
+  // Text drawing
+  // =========================================================================
+  void _drawText(ui.Canvas canvas, double w, double h) {
     if (_isCorner) {
-      _drawCornerContent(canvas, w, h);
+      _drawCorner(canvas, w, h);
       return;
     }
 
-    // Rotate canvas so text reads inward from each edge
     canvas.save();
     canvas.translate(w / 2, h / 2);
-    if (_isBottom) canvas.rotate(3.14159); // 180°
-    if (_isLeft)   canvas.rotate(1.5708);  // 90° CW
-    if (_isRight)  canvas.rotate(-1.5708); // 90° CCW
+    if (_isBottom) canvas.rotate(3.14159265);
+    if (_isLeft)   canvas.rotate(1.57079633);
+    if (_isRight)  canvas.rotate(-1.57079633);
     canvas.translate(-w / 2, -h / 2);
 
-    // After rotation, treat tile as if it's a "top" tile for text layout
-    final rotW = (_isLeft || _isRight) ? h : w;
-    final rotH = (_isLeft || _isRight) ? w : h;
+    // After rotation, use rotated dimensions for text layout
+    final rw = (_isLeft || _isRight) ? h : w;
+    final rh = (_isLeft || _isRight) ? w : h;
 
     _paintText(
       canvas,
       tile.name,
-      ui.Rect.fromLTWH(1, rotH * 0.25, rotW - 2, rotH * 0.5),
-      fontSize: rotW * 0.09,
+      ui.Rect.fromLTWH(1, rh * 0.24, rw - 2, rh * 0.5),
+      fontSize: rw * 0.088,
       bold: false,
     );
 
@@ -121,8 +119,8 @@ class TileComponent extends PositionComponent with TapCallbacks {
       _paintText(
         canvas,
         '₦${_fmt(tile.price)}',
-        ui.Rect.fromLTWH(1, rotH * 0.72, rotW - 2, rotH * 0.2),
-        fontSize: rotW * 0.08,
+        ui.Rect.fromLTWH(1, rh * 0.72, rw - 2, rh * 0.2),
+        fontSize: rw * 0.08,
         bold: false,
       );
     }
@@ -130,21 +128,19 @@ class TileComponent extends PositionComponent with TapCallbacks {
     canvas.restore();
   }
 
-  void _drawCornerContent(ui.Canvas canvas, double w, double h) {
+  void _drawCorner(ui.Canvas canvas, double w, double h) {
     const emojis = {0: '🚀', 10: '⛓', 20: '🌴', 30: '🚔'};
-    final emoji = emojis[index] ?? '';
-
     _paintText(
       canvas,
-      emoji,
-      ui.Rect.fromLTWH(0, h * 0.15, w, h * 0.4),
-      fontSize: w * 0.3,
+      emojis[index] ?? '',
+      ui.Rect.fromLTWH(0, h * 0.1, w, h * 0.42),
+      fontSize: w * 0.28,
       bold: false,
     );
     _paintText(
       canvas,
       tile.name,
-      ui.Rect.fromLTWH(2, h * 0.55, w - 4, h * 0.38),
+      ui.Rect.fromLTWH(2, h * 0.54, w - 4, h * 0.4),
       fontSize: w * 0.1,
       bold: true,
     );
@@ -157,34 +153,37 @@ class TileComponent extends PositionComponent with TapCallbacks {
     required double fontSize,
     required bool bold,
   }) {
-    final paragraphBuilder = ui.ParagraphBuilder(
+    final pb = ui.ParagraphBuilder(
       ui.ParagraphStyle(
-        textAlign: TextAlign.center,
+        textAlign: ui.TextAlign.center,
         fontSize: fontSize,
-        fontWeight: bold ? FontWeight.bold : FontWeight.w500,
+        fontWeight: bold ? ui.FontWeight.bold : ui.FontWeight.w500,
         maxLines: 3,
         ellipsis: '…',
       ),
     )
-      ..pushStyle(ui.TextStyle(color: const Color(0xFF111111)))
+      ..pushStyle(ui.TextStyle(color: const ui.Color(0xFF111111)))
       ..addText(text);
 
-    final paragraph = paragraphBuilder.build()
+    final para = pb.build()
       ..layout(ui.ParagraphConstraints(width: bounds.width));
-
-    canvas.drawParagraph(paragraph, bounds.topLeft);
+    canvas.drawParagraph(para, bounds.topLeft);
   }
 
-  // ── Side helpers ─────────────────────────────────────────────────────────
+  // =========================================================================
+  // Tap
+  // =========================================================================
+  @override
+  void onTapDown(TapDownEvent event) => onTileTapped(index);
+
+  // =========================================================================
+  // Side helpers
+  // =========================================================================
   bool get _isCorner => index == 0 || index == 10 || index == 20 || index == 30;
   bool get _isBottom => index >= 1  && index <= 9;
   bool get _isLeft   => index >= 11 && index <= 19;
   bool get _isTop    => index >= 21 && index <= 29;
   bool get _isRight  => index >= 31 && index <= 39;
-
-  // ── Tap handling ──────────────────────────────────────────────────────────
-  @override
-  void onTapDown(TapDownEvent event) => onTileTapped(index);
 
   String _fmt(int n) {
     final s = n.toString();
