@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../controllers/game_controller.dart';
 import '../models/game_state.dart';
-import '../models/tile.dart';
+import '../models/card_model.dart';
+import '../models/board_data.dart';
 import '../flame/lagos_game_board.dart';
 import 'lobby_screen.dart';
 import 'tile_info_sheet.dart';
@@ -37,7 +38,7 @@ class _BoardWidgetState extends ConsumerState<BoardWidget> {
 
   void _initFlameGame() {
     // Read the stream from the bridge provider
-    final stream = ref.read(gameBridgeProvider.stream);
+    final stream = ref.read(gameBridgeProvider);
 
     _flameGame = LagosGameBoard(
       gameStateStream: stream,
@@ -48,11 +49,10 @@ class _BoardWidgetState extends ConsumerState<BoardWidget> {
         TileInfoSheet.show(context, board[index], index);
       },
 
-      // Roll animation finished → unblock the controller
+      // Roll animation finished → let the controller apply the roll
       onRollAnimationComplete: () {
-        // Currently the controller processes state synchronously, so no
-        // action needed here. This hook is ready for when we add the
-        // "wait for animation before evaluating landing" feature.
+        if (!mounted) return;
+        ref.read(gameControllerProvider.notifier).resolveRoll();
       },
     );
   }
@@ -65,7 +65,25 @@ class _BoardWidgetState extends ConsumerState<BoardWidget> {
       children: [
         // ── Flame board surface ──────────────────────────────────────────
         Expanded(
-          child: GameWidget(game: _flameGame!),
+          child: Stack(
+            children: [
+              Positioned.fill(child: GameWidget(game: _flameGame!)),
+              // Interactive zoom / pan controls overlay
+              Positioned(
+                top: 8,
+                right: 8,
+                child: _ZoomControls(game: _flameGame!),
+              ),
+              const Positioned(
+                left: 8,
+                bottom: 8,
+                child: _ZoomHint(),
+              ),
+              // Drawn-card modal (topmost)
+              if (gameState.showCardModal)
+                Positioned.fill(child: _CardModal(gameState: gameState)),
+            ],
+          ),
         ),
 
         // ── Flutter control panel ────────────────────────────────────────
@@ -208,6 +226,22 @@ class _ControlPanel extends ConsumerWidget {
                   onTap: controller.payJailFine,
                 ),
 
+              if (player.isInJail &&
+                  gameState.phase == GamePhase.waitingToRoll &&
+                  player.heldJailFreeCards.isNotEmpty)
+                _ActionButton(
+                  label: '🎁  Use Jail-Free Card',
+                  color: const Color(0xFF8E24AA),
+                  onTap: controller.useJailFreeCard,
+                ),
+
+              if (gameState.phase == GamePhase.liquidating)
+                _ActionButton(
+                  label: '💸  Settle Debt ₦${_fmt(gameState.pendingDebt)}',
+                  color: const Color(0xFFEF5350),
+                  onTap: controller.settleDebt,
+                ),
+
               _ActionButton(
                 label: gameState.phase == GamePhase.gameOver
                     ? '🔄  New Game'
@@ -282,6 +316,89 @@ class _ControlPanel extends ConsumerWidget {
   }
 }
 
+// ============================================================================
+// _ZoomControls — floating zoom buttons + level readout over the board
+// ============================================================================
+class _ZoomControls extends StatelessWidget {
+  final LagosGameBoard game;
+  const _ZoomControls({required this.game});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: game.zoomLevelNotifier,
+      builder: (context, zoom, _) {
+        return Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ZoomButton(icon: Icons.add, onTap: game.zoomIn),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  '${(zoom * 100).round()}%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              _ZoomButton(icon: Icons.remove, onTap: game.zoomOut),
+              _ZoomButton(icon: Icons.fit_screen, onTap: game.resetView),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ZoomButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _ZoomButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: Icon(icon, size: 18, color: Colors.white),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// _ZoomHint — discoverability hint for the interactive view controls
+// ============================================================================
+class _ZoomHint extends StatelessWidget {
+  const _ZoomHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black45,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Text(
+        'Scroll / pinch to zoom · drag to pan',
+        style: TextStyle(color: Colors.white70, fontSize: 11),
+      ),
+    );
+  }
+}
+
 class _ActionButton extends StatelessWidget {
   final String label;
   final Color color;
@@ -315,6 +432,94 @@ class _ActionButton extends StatelessWidget {
                 color: textColor,
                 fontWeight: FontWeight.bold,
                 fontSize: 13)),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// _CardModal — overlay showing the drawn Chance / Community Chest card
+// ============================================================================
+class _CardModal extends ConsumerWidget {
+  final GameState gameState;
+  const _CardModal({required this.gameState});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(gameControllerProvider.notifier);
+    final card = gameState.drawnCardId == null
+        ? null
+        : BoardData.cardById(gameState.drawnCardId!);
+    if (card == null) return const SizedBox.shrink();
+
+    final isChance = card.deck == CardDeck.chance;
+    final deckColor =
+        isChance ? const Color(0xFF7B1FA2) : const Color(0xFF1565C0);
+    final deckLabel = isChance ? 'CHANCE' : 'COMMUNITY CHEST';
+
+    return Container(
+      color: Colors.black54,
+      alignment: Alignment.center,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 36),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF8E1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: deckColor, width: 3),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                deckLabel,
+                style: TextStyle(
+                  color: deckColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                card.text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF3E2723),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+              if (gameState.cardResult != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: deckColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    gameState.cardResult!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Color(0xFF4E342E), fontSize: 12.5),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              _ActionButton(
+                label: 'OK',
+                color: deckColor,
+                onTap: controller.dismissCard,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

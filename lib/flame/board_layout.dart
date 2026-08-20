@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:ui';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,58 @@ class BoardLayout {
     final r = tileRect(index);
     return r.center;
   }
+
+  // -------------------------------------------------------------------------
+  // tokenOffset(index, slotIndex, slotCount) — stacking offset for multiple
+  // tokens that share the same tile.
+  //
+  // Returns the offset (board-local coordinates) from the tile center where
+  // the slotIndex-th token should sit when slotCount tokens share the tile.
+  //
+  // Layout strategy (slot 0 = first player listed on the tile):
+  //   • 1 token   → tile center (zero offset)
+  //   • 2–6 tokens → micro-grid aligned with the tile's long axis:
+  //                   1–3 tokens → single column stacked along the long axis
+  //                   4–6 tokens → 2 columns × up to 3 rows
+  //   • 7+ tokens → radial ring around the tile center
+  //
+  // Spacing is edgeSize * 0.42, which keeps every stacked token inside the
+  // tile body for both edge tiles and corners.
+  // -------------------------------------------------------------------------
+  Offset tokenOffset(int index, int slotIndex, int slotCount) {
+    assert(
+      slotIndex >= 0 && slotIndex < slotCount,
+      'Token slot out of range: $slotIndex of $slotCount',
+    );
+    if (slotCount <= 1) return Offset.zero;
+
+    final spacing = edgeSize * 0.42;
+
+    // 7+ tokens on one tile — radial ring.
+    if (slotCount > 6) {
+      final angle = (2 * pi * slotIndex / slotCount) - (pi / 2);
+      return Offset(cos(angle) * spacing, sin(angle) * spacing);
+    }
+
+    // Micro-grid: stack along the tile's long axis, 1–2 columns on the short
+    // axis so tokens never spill over the tile's narrow dimension.
+    final longIsHorizontal = _longIsHorizontal(index);
+    final cols   = slotCount <= 3 ? 1 : 2;
+    final perCol = (slotCount / cols).ceil();
+    final col    = slotIndex % cols;
+    final row    = slotIndex ~/ cols;
+
+    final long  = (row - (perCol - 1) / 2) * spacing;
+    final short = (col - (cols - 1) / 2) * spacing;
+
+    return longIsHorizontal ? Offset(long, short) : Offset(short, long);
+  }
+
+  // Tiles whose long axis runs horizontally are the left/right edge columns
+  // (their width is the corner dimension). Bottom row, top row and corners
+  // stack vertically.
+  bool _longIsHorizontal(int index) =>
+      (index >= 11 && index <= 19) || (index >= 31 && index <= 39);
 
   Rect _corner(double x, double y) =>
       Rect.fromLTWH(x, y, cornerSize, cornerSize);

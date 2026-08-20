@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../controllers/game_controller.dart';
+import '../models/game_state.dart';
 import '../models/tile.dart';
 import '../models/board_data.dart';
 
@@ -8,7 +11,7 @@ import '../models/board_data.dart';
 // Flutter bottom sheet shown when a player taps any tile on the Flame board.
 // Displays: tile name, color group, owner, price, and rent.
 // ---------------------------------------------------------------------------
-class TileInfoSheet extends StatelessWidget {
+class TileInfoSheet extends ConsumerWidget {
   final Tile tile;
   final int tileIndex;
 
@@ -28,7 +31,17 @@ class TileInfoSheet extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final gameState = ref.watch(gameControllerProvider);
+    final controller = ref.read(gameControllerProvider.notifier);
+
+    // Mortgage / unmortgage is only actionable for the current player, on
+    // their own buyable tiles, during their turn (or liquidation).
+    final canManage = tile.isBuyable &&
+        tile.isOwned &&
+        tile.owner!.id == gameState.currentPlayer.id &&
+        (gameState.phase == GamePhase.waitingToRoll ||
+            gameState.phase == GamePhase.liquidating);
     return Container(
       margin: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -99,6 +112,13 @@ class TileInfoSheet extends StatelessWidget {
                         ? tile.owner!.tokenColor
                         : Colors.white54,
                   ),
+                  if (tile.isMortgaged)
+                    const _InfoRow(
+                      icon: '🏚️',
+                      label: 'Status',
+                      value: 'Mortgaged',
+                      valueColor: Color(0xFFFFD600),
+                    ),
                 ],
 
                 if (tile.type == TileType.tax)
@@ -117,6 +137,40 @@ class TileInfoSheet extends StatelessWidget {
                   ),
 
                 const SizedBox(height: 16),
+
+                // ── Mortgage / unmortgage action ──────────────────────────
+                if (canManage) ...[
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () {
+                        if (tile.isMortgaged) {
+                          controller.unmortgageProperty(tileIndex);
+                        } else {
+                          controller.mortgageProperty(tileIndex);
+                        }
+                        Navigator.pop(context);
+                      },
+                      style: TextButton.styleFrom(
+                        backgroundColor: tile.isMortgaged
+                            ? const Color(0xFF2E7D32)
+                            : Colors.white12,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: Text(
+                        tile.isMortgaged
+                            ? '🏠  Unmortgage for '
+                                '${BoardData.currencySymbol}${_fmt((tile.price * 55) ~/ 100)}'
+                            : '🏚️  Mortgage for '
+                                '${BoardData.currencySymbol}${_fmt(tile.price ~/ 2)}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
 
                 // ── Close button ─────────────────────────────────────────
                 SizedBox(

@@ -32,10 +32,13 @@ class TokenComponent extends PositionComponent {
 
   bool _isMoving = false;
 
+  // Number of tokens sharing this token's tile — used to shrink the token
+  // slightly when stacked so the micro-grid offsets stay readable.
+  int _slotCount = 1;
+
   TokenComponent({
     required this.player,
     required this.layout,
-    required int startIndex,
   }) {
     anchor = Anchor.center;
     size   = Vector2.all(_radius * 2);
@@ -50,7 +53,22 @@ class TokenComponent extends PositionComponent {
       ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3);
   }
 
-  double get _radius => layout.edgeSize * 0.28;
+  // -------------------------------------------------------------------------
+  // setSlot — stacking metadata for this token among all tokens on its tile.
+  // The game calls this whenever a player moves so every token on a shared
+  // tile can re-flow to its BoardLayout.tokenOffset() position.
+  // -------------------------------------------------------------------------
+  void setSlot(int slotIndex, int slotCount) {
+    _slotCount = slotCount;
+    size = Vector2.all(_radius * 2);
+  }
+
+  double get _radius {
+    final base = layout.edgeSize * 0.28;
+    if (_slotCount <= 1) return base;
+    if (_slotCount <= 3) return base * 0.85;
+    return base * 0.75;
+  }
 
   // -------------------------------------------------------------------------
   // moveToPosition — slides to a world-space Vector2 with trail
